@@ -40,11 +40,42 @@ class SheetsService:
         sh = self._get_sheet("DailyTasks", ["Time", "Staff", "Task"])
         sh.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), worker, task])
 
-    def get_today_reports(self):
-        try:
-            sh = self.doc.worksheet("Cleaning")
-            all_rows = sh.get_all_records()
-            today = datetime.now().strftime("%Y-%m-%d")
-            return [r for r in all_rows if r['Time'].startswith(today)]
-        except:
-            return []
+        def get_today_reports(self):
+
+            try:
+
+                sh = self.doc.worksheet("Cleaning")
+
+                all_rows = sh.get_all_records()
+
+                today = datetime.now().strftime("%Y-%m-%d")
+
+                
+
+                # Debug log to server console
+
+                print(f"Checking {len(all_rows)} rows for date {today}")
+
+                
+
+                results = []
+
+                for r in all_rows:
+
+                    # Support both 'Time' and 'Timestamp' keys
+
+                    row_date = r.get('Time') or r.get('Timestamp') or ""
+
+                    if str(row_date).startswith(today):
+
+                        results.append(r)
+
+                return results
+
+            except Exception as e:
+
+                print(f"Error fetching reports: {e}")
+
+                return []
+
+    
