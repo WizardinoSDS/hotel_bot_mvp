@@ -13,205 +13,138 @@ from telegram.ext import (
 )
 from sheets_service import SheetsService
 
-# Load environment variables
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+ADMIN_ID = os.getenv("ADMIN_CHAT_ID")
 
-# Initialize Logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
+db_sheets = SheetsService()
 
-# Initialize Sheets Service
-sheets = SheetsService()
+# States
+GET_ROOM, GET_STATUS = range(2)
+GET_ISSUE = 2
+GET_TASK = 3
 
-# Conversation States
-CLEANING_ROOM, CLEANING_STATUS = range(2)
-MAINTENANCE_DESC = range(2, 3)
-TASK_CONFIRM = range(3, 4)
+ROLES = {}
 
-# Simple Role Storage (In-memory for MVP, can be moved to Sheets/DB later)
-# In a real scenario, you'd populate this from a config or database
-USER_ROLES = {
-    # 'CHAT_ID': 'admin' or 'staff'
-}
-
-def is_admin(update: Update):
-    chat_id = str(update.effective_chat.id)
-    return USER_ROLES.get(chat_id) == 'admin' or chat_id == ADMIN_CHAT_ID
+def check_admin(update):
+    uid = str(update.effective_chat.id)
+    return ROLES.get(uid) == 'admin' or uid == ADMIN_ID
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
+    uid = str(update.effective_chat.id)
     user = update.effective_user
+    if not ROLES: ROLES[uid] = 'admin'
     
-    # Auto-assign first user as admin if ADMIN_CHAT_ID is not set, or if it matches
-    if not USER_ROLES:
-        USER_ROLES[chat_id] = 'admin'
+    current_role = ROLES.get(uid, 'staff')
+    msg = f"HotelFlow System - Welcome {user.first_name}!\nRole: {current_role.upper()}\n\n"
     
-    role = USER_ROLES.get(chat_id, 'staff')
-    
-    welcome_text = (
-        f"Welcome to HotelFlow, {user.first_name}!\n"
-        f"Your current role: **{role.upper()}**\n\n"
-    )
-    
-    if role == 'admin':
-        welcome_text += "Admin Commands:\n/admin - Admin Dashboard\n/setrole - Change user roles"
+    if current_role == 'admin':
+        msg += "Commands:\n/admin - Control Panel\n/setrole - Manage Staff"
     else:
-        welcome_text += "Staff Commands:\n/clean - Report Cleaning\n/issue - Report Maintenance\n/tasks - Daily Tasks"
+        msg += "Commands:\n/clean - Cleaning Progress\n/issue - Maintenance\n/tasks - Daily List"
         
-    await update.message.reply_text(welcome_text, parse_mode='Markdown')
+    await update.message.reply_text(msg)
 
-# --- Housekeeping / Cleaning ---
-async def start_cleaning(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Enter the Room Number:")
-    return CLEANING_ROOM
+async def cmd_clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Which room number?")
+    return GET_ROOM
 
-async def get_cleaning_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['room'] = update.message.text
-    reply_keyboard = [['Clean', 'In Progress', 'Dirty']]
+async def handle_room_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['active_room'] = update.message.text
+    btns = [['Clean', 'In Progress', 'Dirty']]
     await update.message.reply_text(
-        f"Status for Room {context.user_data['room']}?",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        f"Status for {context.user_data['active_room']}?",
+        reply_markup=ReplyKeyboardMarkup(btns, one_time_keyboard=True)
     )
-    return CLEANING_STATUS
+    return GET_STATUS
 
-async def finish_cleaning(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status = update.message.text
-    room = context.user_data['room']
-    user_name = update.effective_user.full_name
+async def save_cleaning_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stat = update.message.text
+    room = context.user_data['active_room']
+    worker = update.effective_user.full_name
+    db_sheets.log_cleaning(worker, room, stat)
     
-    sheets.log_cleaning(user_name, room, status)
-    
-    await update.message.reply_text(f"✅ Room {room} updated to {status}.", reply_markup=ReplyKeyboardRemove())
-    
-    # Alert Admin
-    if ADMIN_CHAT_ID:
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"🔔 *Cleaning Alert*\nStaff: {user_name}\nRoom: {room}\nStatus: {status}",
-            parse_mode='Markdown'
-        )
+    await update.message.reply_text(f"Done. Room {room} is now {stat}.", reply_markup=ReplyKeyboardRemove())
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"HOTEL UPDATE\nStaff: {worker}\nRoom: {room}\nStatus: {stat}")
+        except: pass
     return ConversationHandler.END
 
-# --- Maintenance ---
-async def start_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please describe the maintenance issue:")
-    return MAINTENANCE_DESC
+async def cmd_issue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Describe the problem:")
+    return GET_ISSUE
 
-async def finish_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    desc = update.message.text
-    user_name = update.effective_user.full_name
-    
-    sheets.log_maintenance(user_name, desc)
-    
-    await update.message.reply_text("✅ Maintenance issue filed and Admin notified.")
-    
-    if ADMIN_CHAT_ID:
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"⚠️ *Maintenance Issue*\nStaff: {user_name}\nIssue: {desc}",
-            parse_mode='Markdown'
-        )
+async def save_issue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    problem = update.message.text
+    worker = update.effective_user.full_name
+    db_sheets.log_maintenance(worker, problem)
+    await update.message.reply_text("Maintenance reported. Admin notified.")
+    if ADMIN_ID:
+        try: await context.bot.send_message(chat_id=ADMIN_ID, text=f"⚠️MAINTENANCE\nFrom: {worker}\nIssue: {problem}")
+        except: pass
     return ConversationHandler.END
 
-# --- Admin Dashboard ---
-async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await update.message.reply_text("🚫 Access Denied.")
+async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    btns = [['Morning Audit', 'Laundry Check', 'Breakfast Prep']]
+    await update.message.reply_text("Task to confirm:", reply_markup=ReplyKeyboardMarkup(btns, one_time_keyboard=True))
+    return GET_TASK
+
+async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t_name = update.message.text
+    worker = update.effective_user.full_name
+    db_sheets.log_task(worker, t_name)
+    await update.message.reply_text(f"Task '{t_name}' saved.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_admin(update):
+        await update.message.reply_text("Restricted area.")
         return
+    menu = [[InlineKeyboardButton("Today's Summary", callback_data='view_reports')], [InlineKeyboardButton("Reset Tasks", callback_data='reset_tasks')]]
+    await update.message.reply_text("--- ADMIN DASHBOARD ---", reply_markup=InlineKeyboardMarkup(menu))
 
-    keyboard = [
-        [InlineKeyboardButton("View Today's Reports", callback_data='view_reports')],
-        [InlineKeyboardButton("Reset Task List", callback_data='reset_tasks')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("🛠 *Admin Control Panel*", reply_markup=reply_markup, parse_mode='Markdown')
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_clicks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     if query.data == 'view_reports':
-        reports = sheets.get_today_reports()
-        if not reports:
-            await query.edit_message_text("No reports for today yet.")
+        data = db_sheets.get_today_reports()
+        if not data: await query.edit_message_text("No data for today.")
         else:
-            msg = "*Today's Cleaning Reports:*
-"
-            for r in reports:
-                msg += f"- Room {r['Room']}: {r['Status']} ({r['Staff']})\n"
-            await query.edit_message_text(msg, parse_mode='Markdown')
-            
-    elif query.data == 'reset_tasks':
-        await query.edit_message_text("Task list reset functionality would go here (Google Sheets cleared).")
+            txt = "REPORTS:\n"
+            for r in data: txt += f"- Room {r['Room']}: {r['Status']}\n"
+            await query.edit_message_text(txt)
 
-# --- Daily Tasks ---
-async def start_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_keyboard = [['Morning Audit', 'Laundry Check', 'Breakfast Prep']]
-    await update.message.reply_text(
-        "Select the task you completed:",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
-    )
-    return TASK_CONFIRM
-
-async def finish_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    task_name = update.message.text
-    user_name = update.effective_user.full_name
-    
-    sheets.log_task(user_name, task_name)
-    
-    await update.message.reply_text(f"✅ Task '{task_name}' logged.", reply_markup=ReplyKeyboardRemove())
-    
-    if ADMIN_CHAT_ID:
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"📋 *Task Completed*\nStaff: {user_name}\nTask: {task_name}",
-            parse_mode='Markdown'
-        )
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Action cancelled.", reply_markup=ReplyKeyboardRemove())
+async def stop_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Cancelled.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 if __name__ == '__main__':
-    application = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
     
-    # Conversation Handlers
-    cleaning_handler = ConversationHandler(
-        entry_points=[CommandHandler('clean', start_cleaning)],
-        states={
-            CLEANING_ROOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cleaning_room)],
-            CLEANING_STATUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, finish_cleaning)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('admin', admin_panel))
     
-    maintenance_handler = ConversationHandler(
-        entry_points=[CommandHandler('issue', start_maintenance)],
-        states={
-            MAINTENANCE_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, finish_maintenance)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('clean', cmd_clean)],
+        states={GET_ROOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_room_input)], GET_STATUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_cleaning_data)]},
+        fallbacks=[CommandHandler('cancel', stop_action)]
+    ))
+    
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('issue', cmd_issue)],
+        states={GET_ISSUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_issue)]},
+        fallbacks=[CommandHandler('cancel', stop_action)]
+    ))
 
-    tasks_handler = ConversationHandler(
-        entry_points=[CommandHandler('tasks', start_tasks)],
-        states={
-            TASK_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, finish_task)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('tasks', cmd_tasks)],
+        states={GET_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_task)]},
+        fallbacks=[CommandHandler('cancel', stop_action)]
+    ))
 
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('admin', admin_dashboard))
-    application.add_handler(cleaning_handler)
-    application.add_handler(maintenance_handler)
-    application.add_handler(tasks_handler)
-    application.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(handle_clicks))
     
-    print("Bot is running...")
-    application.run_polling()
+    print("Bot is up...")
+    app.run_polling()
