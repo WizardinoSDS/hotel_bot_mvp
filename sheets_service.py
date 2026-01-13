@@ -40,42 +40,50 @@ class SheetsService:
         sh = self._get_sheet("DailyTasks", ["Time", "Staff", "Task"])
         sh.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), worker, task])
 
-        def get_today_reports(self):
+            def get_today_reports(self):
 
-            try:
+                try:
 
-                sh = self.doc.worksheet("Cleaning")
+                    sh = self.doc.worksheet("Cleaning")
 
-                all_rows = sh.get_all_records()
+                    all_rows = sh.get_all_values() # Get everything as raw list of lists
 
-                today = datetime.now().strftime("%Y-%m-%d")
+                    if not all_rows: return []
 
-                
+                    
 
-                # Debug log to server console
+                    headers = all_rows[0]
 
-                print(f"Checking {len(all_rows)} rows for date {today}")
+                    rows = all_rows[1:]
 
-                
+                    today = datetime.now().strftime("%Y-%m-%d")
 
-                results = []
+                    
 
-                for r in all_rows:
+                    results = []
 
-                    # Support both 'Time' and 'Timestamp' keys
+                    for row in rows:
 
-                    row_date = r.get('Time') or r.get('Timestamp') or ""
+                        # Check if 'today' exists in ANY cell of this row (usually the first one)
 
-                    if str(row_date).startswith(today):
+                        if any(today in str(cell) for cell in row):
 
-                        results.append(r)
+                            # Convert back to dict for the bot logic
 
-                return results
+                            results.append(dict(zip(headers, row)))
 
-            except Exception as e:
+                    
 
-                print(f"Error fetching reports: {e}")
+                    print(f"Found {len(results)} matches for {today}")
 
-                return []
+                    return results
+
+                except Exception as e:
+
+                    print(f"Error: {e}")
+
+                    return []
+
+        
 
     
