@@ -40,50 +40,23 @@ class SheetsService:
         sh = self._get_sheet("DailyTasks", ["Time", "Staff", "Task"])
         sh.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), worker, task])
 
-            def get_today_reports(self):
-
-                try:
-
-                    sh = self.doc.worksheet("Cleaning")
-
-                    all_rows = sh.get_all_values() # Get everything as raw list of lists
-
-                    if not all_rows: return []
-
-                    
-
-                    headers = all_rows[0]
-
-                    rows = all_rows[1:]
-
-                    today = datetime.now().strftime("%Y-%m-%d")
-
-                    
-
-                    results = []
-
-                    for row in rows:
-
-                        # Check if 'today' exists in ANY cell of this row (usually the first one)
-
-                        if any(today in str(cell) for cell in row):
-
-                            # Convert back to dict for the bot logic
-
-                            results.append(dict(zip(headers, row)))
-
-                    
-
-                    print(f"Found {len(results)} matches for {today}")
-
-                    return results
-
-                except Exception as e:
-
-                    print(f"Error: {e}")
-
-                    return []
-
-        
-
-    
+    def get_today_reports(self):
+        try:
+            sh = self.doc.worksheet("Cleaning")
+            all_rows = sh.get_all_values()
+            if not all_rows: return []
+            
+            headers = all_rows[0]
+            rows = all_rows[1:]
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            results = []
+            for row in rows:
+                if any(today in str(cell) for cell in row):
+                    results.append(dict(zip(headers, row)))
+            
+            print(f"Found {len(results)} matches for {today}")
+            return results
+        except Exception as e:
+            print(f"Error reading reports: {e}")
+            return []
